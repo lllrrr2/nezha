@@ -304,6 +304,7 @@ type serverForm struct {
 	EnableIPv4   string
 	EnableIpv6   string
 	DDNSDomain   string
+	DDNSProfile  string
 }
 
 func (ma *memberAPI) addOrEditServer(c *gin.Context) {
@@ -323,6 +324,7 @@ func (ma *memberAPI) addOrEditServer(c *gin.Context) {
 		s.EnableIPv4 = sf.EnableIPv4 == "on"
 		s.EnableIpv6 = sf.EnableIpv6 == "on"
 		s.DDNSDomain = sf.DDNSDomain
+		s.DDNSProfile = sf.DDNSProfile
 		if s.ID == 0 {
 			s.Secret, err = utils.GenerateRandomString(18)
 			if err == nil {
@@ -435,25 +437,23 @@ func (ma *memberAPI) addOrEditMonitor(c *gin.Context) {
 		if m.NotificationTag == "" {
 			m.NotificationTag = "default"
 		}
-		if err == nil {
-			err = utils.Json.Unmarshal([]byte(mf.FailTriggerTasksRaw), &m.FailTriggerTasks)
+		err = utils.Json.Unmarshal([]byte(mf.FailTriggerTasksRaw), &m.FailTriggerTasks)
+	}
+	if err == nil {
+		err = utils.Json.Unmarshal([]byte(mf.RecoverTriggerTasksRaw), &m.RecoverTriggerTasks)
+	}
+	if err == nil {
+		if m.ID == 0 {
+			err = singleton.DB.Create(&m).Error
+		} else {
+			err = singleton.DB.Save(&m).Error
 		}
-		if err == nil {
-			err = utils.Json.Unmarshal([]byte(mf.RecoverTriggerTasksRaw), &m.RecoverTriggerTasks)
-		}
-		if err == nil {
-			if m.ID == 0 {
-				err = singleton.DB.Create(&m).Error
-			} else {
-				err = singleton.DB.Save(&m).Error
-			}
-		}
-		if err == nil {
-			if m.Cover == 0 {
-				err = singleton.DB.Unscoped().Delete(&model.MonitorHistory{}, "monitor_id = ? and server_id in (?)", m.ID, strings.Split(m.SkipServersRaw[1:len(m.SkipServersRaw)-1], ",")).Error
-			} else {
-				err = singleton.DB.Unscoped().Delete(&model.MonitorHistory{}, "monitor_id = ? and server_id not in (?)", m.ID, strings.Split(m.SkipServersRaw[1:len(m.SkipServersRaw)-1], ",")).Error
-			}
+	}
+	if err == nil {
+		if m.Cover == 0 {
+			err = singleton.DB.Unscoped().Delete(&model.MonitorHistory{}, "monitor_id = ? and server_id in (?)", m.ID, strings.Split(m.SkipServersRaw[1:len(m.SkipServersRaw)-1], ",")).Error
+		} else {
+			err = singleton.DB.Unscoped().Delete(&model.MonitorHistory{}, "monitor_id = ? and server_id not in (?)", m.ID, strings.Split(m.SkipServersRaw[1:len(m.SkipServersRaw)-1], ",")).Error
 		}
 	}
 	if err == nil {

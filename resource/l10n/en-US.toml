@@ -628,6 +628,9 @@ other = "Enable DDNS IPv6"
 [DDNSDomain]
 other = "DDNS Domain"
 
+[DDNSProfile]
+other = "DDNS Profile Name"
+
 [Feature]
 other = "Feature"
 
@@ -637,5 +640,11 @@ other = "Template"
 [Stat]
 other = "Asset"
 
+[Temperature]
+other = "Temperature"
+
 [DisableSwitchTemplateInFrontend]
 other = "Disable Switch Template in Frontend"
+
+[ServersOnWorldMap]
+other = "Servers On World Map"

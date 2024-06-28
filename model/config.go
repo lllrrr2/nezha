@@ -22,7 +22,7 @@ var Themes = map[string]string{
 	"mdui":          "Neko Mdui",
 	"hotaru":        "Hotaru",
 	"angel-kanade":  "AngelKanade",
-	"server-status": "SeverStatus",
+	"server-status": "ServerStatus",
 	"custom":        "Custom(local)",
 }
 
@@ -32,11 +32,12 @@ var DashboardThemes = map[string]string{
 }
 
 const (
-	ConfigTypeGitHub  = "github"
-	ConfigTypeGitee   = "gitee"
-	ConfigTypeGitlab  = "gitlab"
-	ConfigTypeJihulab = "jihulab"
-	ConfigTypeGitea   = "gitea"
+	ConfigTypeGitHub     = "github"
+	ConfigTypeGitee      = "gitee"
+	ConfigTypeGitlab     = "gitlab"
+	ConfigTypeJihulab    = "jihulab"
+	ConfigTypeGitea      = "gitea"
+	ConfigTypeCloudflare = "cloudflare"
 )
 
 const (
@@ -70,7 +71,7 @@ func (c *AgentConfig) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(c.v.ConfigFileUsed(), data, os.ModePerm)
+	return os.WriteFile(c.v.ConfigFileUsed(), data, 0600)
 }
 
 // Config 站点配置
@@ -125,7 +126,18 @@ type Config struct {
 		WebhookRequestBody string
 		WebhookHeaders     string
 		MaxRetries         uint32
+		Profiles           map[string]DDNSProfile
 	}
+}
+
+type DDNSProfile struct {
+	Provider           string
+	AccessID           string
+	AccessSecret       string
+	WebhookURL         string
+	WebhookMethod      string
+	WebhookRequestBody string
+	WebhookHeaders     string
 }
 
 // Read 读取配置文件并应用
@@ -166,12 +178,6 @@ func (c *Config) Read(path string) error {
 	if c.AvgPingCount == 0 {
 		c.AvgPingCount = 2
 	}
-	if c.DDNS.Provider == "" {
-		c.DDNS.Provider = "webhook"
-	}
-	if c.DDNS.WebhookMethod == "" {
-		c.DDNS.WebhookMethod = "POST"
-	}
 	if c.DDNS.MaxRetries == 0 {
 		c.DDNS.MaxRetries = 3
 	}
@@ -199,5 +205,5 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(c.v.ConfigFileUsed(), data, os.ModePerm)
+	return os.WriteFile(c.v.ConfigFileUsed(), data, 0600)
 }
