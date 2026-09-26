@@ -1,16 +1,13 @@
-# latest 镜像还没有 riscv64 https://hub.docker.com/_/alpine/tags
-FROM alpine:edge
+FROM alpine AS depend
+RUN apk add --update --no-cache ca-certificates tzdata
+
+FROM busybox:stable-musl
 
 ARG TARGETOS
 ARG TARGETARCH
 
-RUN apk update && \
-    apk upgrade --no-cache && \
-    apk add --no-cache tzdata && \
-    cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    echo 'Asia/Shanghai' >/etc/timezone && \
-    rm -rf /var/cache/apk/*
-
+COPY --from=depend /etc/ssl/certs /etc/ssl/certs
+COPY --from=depend /usr/share/zoneinfo /usr/share/zoneinfo
 COPY ./script/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
@@ -18,5 +15,7 @@ WORKDIR /dashboard
 COPY dist/dashboard-${TARGETOS}-${TARGETARCH} ./app
 
 VOLUME ["/dashboard/data"]
-EXPOSE 80 5555
+EXPOSE 8008
+ARG TZ=Asia/Shanghai
+ENV TZ=$TZ
 ENTRYPOINT ["/entrypoint.sh"]

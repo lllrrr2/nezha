@@ -9,7 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/naiba/nezha/pkg/utils"
+	"github.com/goccy/go-json"
+	"github.com/nezhahq/nezha/pkg/utils"
 )
 
 const (
@@ -32,14 +33,14 @@ type NotificationServerBundle struct {
 
 type Notification struct {
 	Common
-	Name          string
-	Tag           string // 分组名
-	URL           string
-	RequestMethod int
-	RequestType   int
-	RequestHeader string `gorm:"type:longtext" `
-	RequestBody   string `gorm:"type:longtext" `
-	VerifySSL     *bool
+	Name              string `json:"name"`
+	URL               string `json:"url"`
+	RequestMethod     uint8  `json:"request_method"`
+	RequestType       uint8  `json:"request_type"`
+	RequestHeader     string `json:"request_header" gorm:"type:longtext"`
+	RequestBody       string `json:"request_body" gorm:"type:longtext"`
+	VerifyTLS         *bool  `json:"verify_tls,omitempty"`
+	FormatMetricUnits *bool  `json:"format_metric_units,omitempty"`
 }
 
 func (ns *NotificationServerBundle) reqURL(message string) string {
@@ -67,12 +68,12 @@ func (ns *NotificationServerBundle) reqBody(message string) (string, error) {
 	switch n.RequestType {
 	case NotificationRequestTypeJSON:
 		return ns.replaceParamsInString(n.RequestBody, message, func(msg string) string {
-			msgBytes, _ := utils.Json.Marshal(msg)
+			msgBytes, _ := json.Marshal(msg)
 			return string(msgBytes)[1 : len(msgBytes)-1]
 		}), nil
 	case NotificationRequestTypeForm:
-		var data map[string]string
-		if err := utils.Json.Unmarshal([]byte(n.RequestBody), &data); err != nil {
+		data, err := utils.GjsonIter(n.RequestBody)
+		if err != nil {
 			return "", err
 		}
 		params := url.Values{}
@@ -99,8 +100,8 @@ func (n *Notification) setRequestHeader(req *http.Request) error {
 	if n.RequestHeader == "" {
 		return nil
 	}
-	var m map[string]string
-	if err := utils.Json.Unmarshal([]byte(n.RequestHeader), &m); err != nil {
+	m, err := utils.GjsonIter(n.RequestHeader)
+	if err != nil {
 		return err
 	}
 	for k, v := range m {
@@ -110,13 +111,8 @@ func (n *Notification) setRequestHeader(req *http.Request) error {
 }
 
 func (ns *NotificationServerBundle) Send(message string) error {
-	var client *http.Client
 	n := ns.Notification
-	if n.VerifySSL != nil && *n.VerifySSL {
-		client = utils.HttpClient
-	} else {
-		client = utils.HttpClientSkipTlsVerify
-	}
+	verifyTLS := n.VerifyTLS != nil && *n.VerifyTLS
 
 	reqBody, err := ns.reqBody(message)
 	if err != nil {
@@ -128,7 +124,13 @@ func (ns *NotificationServerBundle) Send(message string) error {
 		return err
 	}
 
-	req, err := http.NewRequest(reqMethod, ns.reqURL(message), strings.NewReader(reqBody))
+	reqURL := ns.reqURL(message)
+	client, err := newNotificationHTTPClient(reqURL, verifyTLS)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(reqMethod, reqURL, strings.NewReader(reqBody))
 	if err != nil {
 		return err
 	}
@@ -148,8 +150,7 @@ func (ns *NotificationServerBundle) Send(message string) error {
 	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("%d@%s %s", resp.StatusCode, resp.Status, string(body))
+		return notificationResponseError(resp)
 	} else {
 		_, _ = io.Copy(io.Discard, resp.Body)
 	}
@@ -157,55 +158,105 @@ func (ns *NotificationServerBundle) Send(message string) error {
 	return nil
 }
 
+func notificationResponseError(resp *http.Response) error {
+	_, _ = io.CopyN(io.Discard, resp.Body, 4096)
+	return fmt.Errorf("%d@%s", resp.StatusCode, resp.Status)
+}
+
+func newNotificationHTTPClient(rawURL string, verifyTLS bool) (*http.Client, error) {
+	return utils.NewRestrictedHTTPClient(rawURL, !verifyTLS)
+}
+
 // replaceParamInString 替换字符串中的占位符
 func (ns *NotificationServerBundle) replaceParamsInString(str string, message string, mod func(string) string) string {
 	if mod == nil {
-		mod = func(s string) string {
-			return s
-		}
+		mod = func(s string) string { return s }
 	}
 
-	str = strings.ReplaceAll(str, "#NEZHA#", mod(message))
-	str = strings.ReplaceAll(str, "#DATETIME#", mod(time.Now().In(ns.Loc).String()))
+	replacements := []string{
+		"#NEZHA#", mod(message),
+		"#DATETIME#", mod(time.Now().In(ns.Loc).String()),
+	}
 
 	if ns.Server != nil {
-		str = strings.ReplaceAll(str, "#SERVER.NAME#", mod(ns.Server.Name))
-		str = strings.ReplaceAll(str, "#SERVER.CPU#", mod(fmt.Sprintf("%f", ns.Server.State.CPU)))
-		str = strings.ReplaceAll(str, "#SERVER.MEM#", mod(fmt.Sprintf("%d", ns.Server.State.MemUsed)))
-		str = strings.ReplaceAll(str, "#SERVER.SWAP#", mod(fmt.Sprintf("%d", ns.Server.State.SwapUsed)))
-		str = strings.ReplaceAll(str, "#SERVER.DISK#", mod(fmt.Sprintf("%d", ns.Server.State.DiskUsed)))
-		str = strings.ReplaceAll(str, "#SERVER.NETINSPEED#", mod(fmt.Sprintf("%d", ns.Server.State.NetInSpeed)))
-		str = strings.ReplaceAll(str, "#SERVER.NETOUTSPEED#", mod(fmt.Sprintf("%d", ns.Server.State.NetOutSpeed)))
-		str = strings.ReplaceAll(str, "#SERVER.TRANSFERIN#", mod(fmt.Sprintf("%d", ns.Server.State.NetInTransfer)))
-		str = strings.ReplaceAll(str, "#SERVER.TRANSFEROUT#", mod(fmt.Sprintf("%d", ns.Server.State.NetOutTransfer)))
-		str = strings.ReplaceAll(str, "#SERVER.LOAD1#", mod(fmt.Sprintf("%f", ns.Server.State.Load1)))
-		str = strings.ReplaceAll(str, "#SERVER.LOAD5#", mod(fmt.Sprintf("%f", ns.Server.State.Load5)))
-		str = strings.ReplaceAll(str, "#SERVER.LOAD15#", mod(fmt.Sprintf("%f", ns.Server.State.Load15)))
-		str = strings.ReplaceAll(str, "#SERVER.TCPCONNCOUNT#", mod(fmt.Sprintf("%d", ns.Server.State.TcpConnCount)))
-		str = strings.ReplaceAll(str, "#SERVER.UDPCONNCOUNT#", mod(fmt.Sprintf("%d", ns.Server.State.UdpConnCount)))
+		runtime := ns.Server.RuntimeSnapshot()
+		if runtime.State == nil || runtime.Host == nil {
+			return str
+		}
+		state := runtime.State
+		host := runtime.Host
+		replacements = append(replacements,
+			"#SERVER.NAME#", mod(ns.Server.Name),
+			"#SERVER.ID#", mod(fmt.Sprintf("%d", ns.Server.ID)),
+
+			// Converted metrics
+			"#SERVER.CPU#", mod(ns.formatUsage(false, state.CPU)),
+			"#SERVER.MEM#", mod(ns.formatUsage(true, float64(state.MemUsed)/float64(host.MemTotal))),
+			"#SERVER.SWAP#", mod(ns.formatUsage(true, float64(state.SwapUsed)/float64(host.SwapTotal))),
+			"#SERVER.DISK#", mod(ns.formatUsage(true, float64(state.DiskUsed)/float64(host.DiskTotal))),
+			"#SERVER.SPEEDIN#", mod(fmt.Sprintf("%s/s", ns.formatSize(state.NetInSpeed))),
+			"#SERVER.SPEEDOUT#", mod(fmt.Sprintf("%s/s", ns.formatSize(state.NetOutSpeed))),
+			"#SERVER.TRANSFERIN#", mod(ns.formatSize(state.NetInTransfer)),
+			"#SERVER.TRANSFEROUT#", mod(ns.formatSize(state.NetOutTransfer)),
+
+			// Raw metrics
+			"#SERVER.CPUUSED#", mod(fmt.Sprintf("%f", state.CPU)),
+			"#SERVER.MEMUSED#", mod(fmt.Sprintf("%d", state.MemUsed)),
+			"#SERVER.SWAPUSED#", mod(fmt.Sprintf("%d", state.SwapUsed)),
+			"#SERVER.DISKUSED#", mod(fmt.Sprintf("%d", state.DiskUsed)),
+			"#SERVER.MEMTOTAL#", mod(fmt.Sprintf("%d", host.MemTotal)),
+			"#SERVER.SWAPTOTAL#", mod(fmt.Sprintf("%d", host.SwapTotal)),
+			"#SERVER.DISKTOTAL#", mod(fmt.Sprintf("%d", host.DiskTotal)),
+			"#SERVER.NETINSPEED#", mod(fmt.Sprintf("%d", state.NetInSpeed)),
+			"#SERVER.NETOUTSPEED#", mod(fmt.Sprintf("%d", state.NetOutSpeed)),
+			"#SERVER.NETINTRANSFER#", mod(fmt.Sprintf("%d", state.NetInTransfer)),
+			"#SERVER.NETOUTTRANSFER#", mod(fmt.Sprintf("%d", state.NetOutTransfer)),
+			"#SERVER.LOAD1#", mod(fmt.Sprintf("%f", state.Load1)),
+			"#SERVER.LOAD5#", mod(fmt.Sprintf("%f", state.Load5)),
+			"#SERVER.LOAD15#", mod(fmt.Sprintf("%f", state.Load15)),
+			"#SERVER.TCPCONNCOUNT#", mod(fmt.Sprintf("%d", state.TcpConnCount)),
+			"#SERVER.UDPCONNCOUNT#", mod(fmt.Sprintf("%d", state.UdpConnCount)),
+		)
 
 		var ipv4, ipv6, validIP string
-		ipList := strings.Split(ns.Server.Host.IP, "/")
-		if len(ipList) > 1 {
-			// 双栈
-			ipv4 = ipList[0]
-			ipv6 = ipList[1]
+		ip := ns.Server.GeoIP.IP
+		if ip.IPv4Addr != "" && ip.IPv6Addr != "" {
+			ipv4 = ip.IPv4Addr
+			ipv6 = ip.IPv6Addr
 			validIP = ipv4
-		} else if len(ipList) == 1 {
-			// 仅ipv4|ipv6
-			if strings.Contains(ipList[0], ":") {
-				ipv6 = ipList[0]
-				validIP = ipv6
-			} else {
-				ipv4 = ipList[0]
-				validIP = ipv4
-			}
+		} else if ip.IPv4Addr != "" {
+			ipv4 = ip.IPv4Addr
+			validIP = ipv4
+		} else {
+			ipv6 = ip.IPv6Addr
+			validIP = ipv6
 		}
 
-		str = strings.ReplaceAll(str, "#SERVER.IP#", mod(validIP))
-		str = strings.ReplaceAll(str, "#SERVER.IPV4#", mod(ipv4))
-		str = strings.ReplaceAll(str, "#SERVER.IPV6#", mod(ipv6))
+		replacements = append(replacements,
+			"#SERVER.IP#", mod(validIP),
+			"#SERVER.IPV4#", mod(ipv4),
+			"#SERVER.IPV6#", mod(ipv6),
+		)
 	}
 
-	return str
+	replacer := strings.NewReplacer(replacements...)
+	return replacer.Replace(str)
+}
+
+func (ns *NotificationServerBundle) formatUsage(toPercentage bool, usage float64) string {
+	if ns.Notification.FormatMetricUnits != nil && *ns.Notification.FormatMetricUnits {
+		if toPercentage {
+			usage = usage * 100
+		}
+
+		return fmt.Sprintf("%.2f %%", usage)
+	}
+	return fmt.Sprintf("%f", usage)
+}
+
+func (ns *NotificationServerBundle) formatSize(size uint64) string {
+	if ns.Notification.FormatMetricUnits != nil && *ns.Notification.FormatMetricUnits {
+		return utils.Bytes(size)
+	}
+	return fmt.Sprintf("%d", size)
 }
